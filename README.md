@@ -73,7 +73,7 @@ See **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)** for free hosting on Render 
 - Completion dashboard
 - Audit trail for post-lock changes
 
-### Bonus (no Azure AD)
+### Bonus 
 - Email notifications (submit, approve, return, reminders)
 - Rule-based escalations with admin log
 - Analytics dashboard (QoQ, distribution, manager effectiveness)

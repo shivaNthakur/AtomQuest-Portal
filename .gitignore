@@ -1,0 +1,13 @@
+node_modules
+.next
+.env
+.env.local
+.env*.local
+dist
+*.log
+.DS_Store
+
+
+# Hackathon Guides
+DEMO_GUIDE.md
+DEPLOYMENT_GUIDE.md

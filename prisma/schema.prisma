@@ -1,0 +1,410 @@
+// AtomQuest — Goal Portal + Work OS (Phase 1 schema)
+// Run: npx prisma db push && npm run db:seed
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ─────────────────────────────────────────
+// EXISTING — Goals & cycles
+// ─────────────────────────────────────────
+
+enum Role {
+  EMPLOYEE
+  MANAGER
+  ADMIN
+}
+
+enum UoMType {
+  NUMERIC_MIN
+  NUMERIC_MAX
+  TIMELINE
+  ZERO_BASED
+}
+
+enum GoalStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  RETURNED
+  LOCKED
+}
+
+enum AchievementStatus {
+  NOT_STARTED
+  ON_TRACK
+  COMPLETED
+}
+
+enum CheckinPhase {
+  GOAL_SETTING
+  Q1
+  Q2
+  Q3
+  Q4_ANNUAL
+}
+
+enum EscalationType {
+  GOAL_NOT_SUBMITTED
+  GOAL_NOT_APPROVED
+  CHECKIN_NOT_COMPLETED
+}
+
+// ─────────────────────────────────────────
+// NEW — Work OS
+// ─────────────────────────────────────────
+
+enum ChannelType {
+  ORG_WIDE
+  DEPT_WIDE
+  TEAM_WIDE
+  DIRECT_MESSAGE
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  REVIEW
+  DONE
+}
+
+enum FeedbackType {
+  PEER
+  UPWARD
+  DOWNWARD
+  HR_REVIEW
+}
+
+// ─────────────────────────────────────────
+// ORGANIZATIONAL STRUCTURE
+// ─────────────────────────────────────────
+
+model Department {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  slug        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  teams    Team[]
+  users    User[]
+  channels Channel[]
+
+  @@index([slug])
+}
+
+model Team {
+  id           String   @id @default(uuid())
+  name         String
+  departmentId String
+  managerId    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  manager    User       @relation("TeamManager", fields: [managerId], references: [id])
+  members    User[]     @relation("TeamMembers")
+  tasks      Task[]
+  channels   Channel[]
+
+  @@unique([departmentId, name])
+  @@index([managerId])
+}
+
+// ─────────────────────────────────────────
+// USER (extended)
+// ─────────────────────────────────────────
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  name          String
+  passwordHash  String
+  role          Role
+  department    String?  // legacy display label — keep for existing APIs
+  managerId     String?  // L1 (direct report line)
+  departmentId  String?
+  teamId        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // L1 reporting line (existing)
+  manager User?  @relation("ManagerReports", fields: [managerId], references: [id])
+  reports User[] @relation("ManagerReports")
+
+  // Org structure (new)
+  deptRef       Department? @relation(fields: [departmentId], references: [id])
+  team          Team?       @relation("TeamMembers", fields: [teamId], references: [id])
+  managedTeams  Team[]      @relation("TeamManager")
+
+  // Goals (existing)
+  goals               Goal[]           @relation("EmployeeGoals")
+  approvedGoals       Goal[]           @relation("ManagerApprovals")
+  sharedGoalLinks     SharedGoalLink[]
+  checkinsGiven       ManagerCheckin[]
+  auditLogs           AuditLog[]
+  escalationsFor      Escalation[]     @relation("EscalationTarget")
+  escalationsActioned Escalation[]     @relation("EscalationActioner")
+
+  // Chat (new)
+  messagesSent        Message[]
+  channelMemberships  ChannelMember[]
+
+  // Tasks (new)
+  tasksAssigned Task[] @relation("TaskAssignee")
+  tasksCreated  Task[] @relation("TaskCreator")
+
+  // Feedback (new)
+  feedbackGiven     Feedback[] @relation("FeedbackProvider")
+  feedbackReceived  Feedback[] @relation("FeedbackRecipient")
+
+  @@index([managerId])
+  @@index([role])
+  @@index([departmentId])
+  @@index([teamId])
+}
+
+// ─────────────────────────────────────────
+// COMMUNICATION — Channels & messages
+// ─────────────────────────────────────────
+
+model Channel {
+  id           String      @id @default(uuid())
+  name         String
+  type         ChannelType
+  departmentId String?
+  teamId       String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  team       Team?       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  members    ChannelMember[]
+  messages   Message[]
+
+  @@index([type])
+  @@index([departmentId])
+  @@index([teamId])
+}
+
+model ChannelMember {
+  id        String   @id @default(uuid())
+  channelId String
+  userId    String
+  joinedAt  DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  content   String
+  senderId  String
+  channelId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sender  User    @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([channelId, createdAt])
+  @@index([senderId])
+}
+
+// ─────────────────────────────────────────
+// TEAM TASK SCHEDULER
+// ─────────────────────────────────────────
+
+model Task {
+  id          String     @id @default(uuid())
+  title       String
+  description String?
+  assigneeId  String?
+  creatorId   String
+  teamId      String
+  status      TaskStatus @default(TODO)
+  dueDate     DateTime?
+  sortOrder   Int        @default(0)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  assignee User? @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  creator  User  @relation("TaskCreator", fields: [creatorId], references: [id])
+  team     Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([teamId, status])
+  @@index([assigneeId])
+}
+
+// ─────────────────────────────────────────
+// 360° FEEDBACK
+// ─────────────────────────────────────────
+
+model Feedback {
+  id          String       @id @default(uuid())
+  providerId  String
+  recipientId String
+  type        FeedbackType
+  content     String
+  rating      Int?         // 1–5 optional
+  isAnonymous Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+
+  provider  User @relation("FeedbackProvider", fields: [providerId], references: [id], onDelete: Cascade)
+  recipient User @relation("FeedbackRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, createdAt])
+  @@index([providerId])
+  @@index([type])
+}
+
+// ─────────────────────────────────────────
+// EXISTING — Goals (unchanged relations)
+// ─────────────────────────────────────────
+
+model GoalCycle {
+  id        String       @id @default(uuid())
+  year      Int
+  phase     CheckinPhase
+  opensAt   DateTime
+  closesAt  DateTime
+  isActive  Boolean      @default(false)
+  createdAt DateTime     @default(now())
+
+  goals        Goal[]
+  checkins     ManagerCheckin[]
+  achievements Achievement[]
+
+  @@unique([year, phase])
+}
+
+model ThrustArea {
+  id    String @id @default(uuid())
+  name  String @unique
+  goals Goal[]
+}
+
+model Goal {
+  id             String     @id @default(uuid())
+  employeeId     String
+  cycleId        String
+  thrustAreaId   String
+  title          String
+  description    String?
+  uomType        UoMType
+  target         Float
+  targetDate     DateTime?
+  weightage      Float
+  status         GoalStatus @default(DRAFT)
+  isShared       Boolean    @default(false)
+  primaryOwnerId String?
+
+  approvedBy   String?
+  approvedAt   DateTime?
+  returnReason String?
+  lockedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee   User       @relation("EmployeeGoals", fields: [employeeId], references: [id])
+  approver   User?      @relation("ManagerApprovals", fields: [approvedBy], references: [id])
+  cycle      GoalCycle  @relation(fields: [cycleId], references: [id])
+  thrustArea ThrustArea @relation(fields: [thrustAreaId], references: [id])
+
+  achievements Achievement[]
+  sharedLinks  SharedGoalLink[]
+  auditLogs    AuditLog[]
+
+  @@index([employeeId, cycleId])
+  @@index([status])
+}
+
+model SharedGoalLink {
+  id           String @id @default(uuid())
+  masterGoalId String
+  recipientId  String
+  weightage    Float
+
+  masterGoal Goal @relation(fields: [masterGoalId], references: [id], onDelete: Cascade)
+  recipient  User @relation(fields: [recipientId], references: [id])
+
+  @@unique([masterGoalId, recipientId])
+}
+
+model Achievement {
+  id            String            @id @default(uuid())
+  goalId        String
+  cycleId       String
+  actualValue   Float
+  actualDate    DateTime?
+  status        AchievementStatus @default(NOT_STARTED)
+  computedScore Float?
+  notes         String?
+  submittedAt   DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  goal     Goal              @relation(fields: [goalId], references: [id])
+  cycle    GoalCycle         @relation(fields: [cycleId], references: [id])
+  checkins ManagerCheckin[]
+
+  @@unique([goalId, cycleId])
+  @@index([cycleId])
+}
+
+model ManagerCheckin {
+  id            String   @id @default(uuid())
+  managerId     String
+  achievementId String
+  cycleId       String
+  comment       String
+  checkedInAt   DateTime @default(now())
+
+  manager     User        @relation(fields: [managerId], references: [id])
+  achievement Achievement @relation(fields: [achievementId], references: [id])
+  cycle       GoalCycle   @relation(fields: [cycleId], references: [id])
+
+  @@unique([managerId, achievementId, cycleId])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  goalId      String
+  changedById String
+  field       String
+  oldValue    String?
+  newValue    String?
+  reason      String?
+  changedAt   DateTime @default(now())
+
+  goal      Goal @relation(fields: [goalId], references: [id])
+  changedBy User @relation(fields: [changedById], references: [id])
+
+  @@index([goalId, changedAt])
+}
+
+model Escalation {
+  id           String         @id @default(uuid())
+  targetUserId String
+  type         EscalationType
+  message      String
+  resolvedAt   DateTime?
+  resolvedById String?
+  createdAt    DateTime       @default(now())
+
+  targetUser User  @relation("EscalationTarget", fields: [targetUserId], references: [id])
+  resolvedBy User? @relation("EscalationActioner", fields: [resolvedById], references: [id])
+
+  @@index([targetUserId, resolvedAt])
+}

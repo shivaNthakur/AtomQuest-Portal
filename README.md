@@ -93,7 +93,7 @@ See **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)** for free hosting on Render 
 
 Deploy as a **Node.js** app (not serverless-only) so Socket.io and cron work:
 
-- Railway, Render, Fly.io, or VPS
+- Render
 - Set all env vars from `.env.example`
 - Run `npm run build && npm start`
 
